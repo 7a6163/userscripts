@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.7.2
+// @version      1.8.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -19,6 +19,8 @@
     [data-threads-cta] { display: none !important; }
     #barcelona-header,
     nav { display: none !important; }
+    /* Override --header-height so content moves to top after header removal */
+    [style*="--header-height"] { --header-height: 0px !important; }
   `;
   (document.head || document.documentElement).appendChild(style);
 
@@ -115,11 +117,36 @@
     }
   }
 
+  // --- Fix content position ---------------------------------------------
+  // Removing the header leaves --header-height (102px) on the content
+  // wrapper, which external CSS uses for padding-top. Reset the variable
+  // and any padding/margin so content moves to the top.
+  function fixContentPosition() {
+    // Reset --header-height CSS variable on all elements that set it.
+    for (const el of document.querySelectorAll('[style*="--header-height"]')) {
+      el.style.setProperty('--header-height', '0px', 'important');
+    }
+
+    const header = document.getElementById('barcelona-header');
+    if (header) {
+      let next = header.nextElementSibling;
+      while (next) {
+        next.style.setProperty('padding-top', '0', 'important');
+        next.style.setProperty('margin-top', '0', 'important');
+        next = next.nextElementSibling;
+      }
+    }
+    if (document.body) {
+      document.body.style.setProperty('padding-top', '0', 'important');
+    }
+  }
+
   // --- Orchestration -----------------------------------------------------
   function run() {
     hideOverlay();
     hideStandaloneCTAs();
     unlockScroll();
+    fixContentPosition();
   }
 
   run();
