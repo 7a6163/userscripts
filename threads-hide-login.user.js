@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.7.0
+// @version      1.7.2
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -17,6 +17,8 @@
   style.textContent = `
     [data-threads-overlay],
     [data-threads-cta] { display: none !important; }
+    #barcelona-header,
+    nav { display: none !important; }
   `;
   (document.head || document.documentElement).appendChild(style);
 
