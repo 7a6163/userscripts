@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.0.0
-// @description  Hides the "Say more with Threads" login overlay on threads.net
+// @version      1.1.0
+// @description  Hides the login/CTA overlay on threads.net and threads.com (desktop + mobile)
 // @author       zac
 // @match        https://www.threads.net/*
 // @match        https://www.threads.com/*
+// @match        https://www.ig.me/*
+// @match        https://www.instagram.com/threads*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
@@ -23,25 +25,46 @@
   (document.head || document.documentElement).appendChild(style);
 
   // Mark + hide the overlay by text content (robust against class renaming).
+  // Threads serves different overlays on desktop vs. mobile web:
+  //   - Desktop: hero "Say more with Threads" + "Continue with Instagram"
+  //   - Mobile:  hero "Get the full app experience in the Threads app" (or
+  //              short variant "Get the full app experience") + open-app CTA
+  const HERO_PATTERNS = [
+    /^Say more with Threads$/,
+    /^Get the full app experience( in the Threads app)?$/,
+  ];
+  // Secondary text that helps confirm we're inside the overlay (not just any
+  // banner): the "Continue with Instagram" button (desktop) or the
+  // "Open app" / "Get the app" button (mobile).
+  const CTA_PATTERNS = [
+    /Continue with Instagram/,
+    /\bOpen (the )?app\b/,
+    /\bGet the app\b/,
+    /\bOpen Threads\b/,
+  ];
+
+  function matchesAny(text, patterns) {
+    return patterns.some(p => p.test(text));
+  }
+
   function hideOverlay(root) {
     const scope = root || document;
-    // Find the hero text node that only appears in the login overlay.
+    // Find the hero text node that only appears in the login/CTA overlay.
     const hero = [...scope.querySelectorAll('span[dir="auto"]')].find(el =>
-      el.textContent.trim() === 'Say more with Threads'
+      matchesAny(el.textContent.trim(), HERO_PATTERNS)
     );
     if (!hero) return false;
 
     // Walk up to the outer overlay container. The hero sits inside a chain of
     // wrapper divs; climb until we reach a direct child of <body> or a node
-    // that also contains the "Continue with Instagram" button.
+    // that also contains one of the CTA buttons.
     let node = hero;
     while (node && node.parentElement && node.parentElement !== document.body) {
       node = node.parentElement;
-      if (node.querySelector('[role="button"]') &&
-          [...node.querySelectorAll('span[dir="auto"]')].some(s =>
-            /Continue with Instagram/.test(s.textContent))) {
-        break;
-      }
+      const spans = [...node.querySelectorAll('span[dir="auto"]')];
+      const hasCta = spans.some(s => matchesAny(s.textContent, CTA_PATTERNS));
+      const hasButton = node.querySelector('[role="button"], a[href]');
+      if (hasButton && hasCta) break;
     }
     if (node && node !== document.body) {
       node.setAttribute('data-threads-login-overlay', '');
