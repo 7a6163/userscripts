@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.4.0
+// @version      1.5.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -27,51 +27,67 @@
     /^Say more with Threads$/,
     /^Get the full app experience( in the Threads app)?$/,
   ];
-  // Exact button labels (matched against the element's own text, not subtree).
   const BUTTON_LABELS = [
-    'Continue with Instagram',
-    'Open app',
-    'Open the app',
-    'Get the app',
-    'Open Threads',
-    'Log in',
-    'Login',
-    'Sign up',
-    'Use the app',
+    'continue with instagram',
+    'open app',
+    'open the app',
+    'get the app',
+    'open threads',
+    'log in',
+    'login',
+    'sign up',
+    'use the app',
   ];
 
   function isButtonLabel(text) {
-    const t = text.trim().replace(/\s+/g, ' ').toLowerCase();
-    return BUTTON_LABELS.some(lbl => t === lbl.toLowerCase());
+    return BUTTON_LABELS.includes(text.trim().replace(/\s+/g, ' ').toLowerCase());
   }
 
-  // --- Scroll lock removal (overflow only) -------------------------------
+  function isHeroText(text) {
+    return HERO_PATTERNS.some(p => p.test(text.trim()));
+  }
+
+  // --- Scroll lock removal ----------------------------------------------
   function unlockScroll() {
-    for (const el of [document.documentElement, document.body]) {
+    // Remove overflow:hidden from html, body, and any ancestor that might
+    // be locking scroll. Only touch overflow, nothing else.
+    const targets = [document.documentElement, document.body];
+    for (const el of targets) {
       if (!el) continue;
-      if (el.style.overflow === 'hidden' || getComputedStyle(el).overflow === 'hidden') {
+      const cs = getComputedStyle(el);
+      if (cs.overflow === 'hidden' || cs.overflowY === 'hidden') {
         el.style.setProperty('overflow', 'auto', 'important');
       }
     }
   }
 
   // --- Overlay hiding ----------------------------------------------------
+  // Strategy: find hero text, then climb to the nearest position:fixed
+  // ancestor (the overlay layer). If none, climb to the nearest ancestor
+  // that is a direct child of <body>. This avoids hiding the main content.
   function hideOverlay(root) {
     const scope = root || document;
     const hero = [...scope.querySelectorAll('span[dir="auto"]')].find(el =>
-      HERO_PATTERNS.some(p => p.test(el.textContent.trim()))
+      isHeroText(el.textContent)
     );
     if (!hero) return false;
 
-    // Climb to the first ancestor that is a direct child of <body> — that's
-    // the overlay container. Don't climb past body.
     let node = hero;
-    while (node && node.parentElement && node.parentElement !== document.body) {
+    let fixedAncestor = null;
+    while (node && node.parentElement) {
       node = node.parentElement;
+      if (node === document.body) break;
+      const pos = getComputedStyle(node).position;
+      if (pos === 'fixed' || pos === 'absolute') {
+        fixedAncestor = node;
+        break;
+      }
     }
-    if (node && node !== document.body && !node.hasAttribute('data-threads-overlay')) {
-      node.setAttribute('data-threads-overlay', '');
-      node.style.setProperty('display', 'none', 'important');
+
+    const target = fixedAncestor || node;
+    if (target && target !== document.body && !target.hasAttribute('data-threads-overlay')) {
+      target.setAttribute('data-threads-overlay', '');
+      target.style.setProperty('display', 'none', 'important');
       unlockScroll();
       return true;
     }
@@ -79,8 +95,8 @@
   }
 
   // --- Standalone CTA hiding --------------------------------------------
-  // Only hide the button element itself (no climbing). Match against the
-  // element's direct text content to avoid hiding large containers.
+  // Hide buttons whose textContent exactly matches a known CTA label.
+  // Using full textContent is safe because we match exact strings only.
   function hideStandaloneCTAs(root) {
     const scope = root || document;
     const candidates = scope.querySelectorAll(
@@ -89,12 +105,7 @@
     for (const el of candidates) {
       if (el.closest('[data-threads-overlay]')) continue;
       if (el.hasAttribute('data-threads-cta')) continue;
-      // Get the element's own text (direct text nodes + immediate span children).
-      const ownText = [...el.childNodes]
-        .filter(n => n.nodeType === 3 || (n.nodeType === 1 && n.tagName === 'SPAN'))
-        .map(n => n.textContent.trim())
-        .join(' ');
-      if (isButtonLabel(ownText)) {
+      if (isButtonLabel(el.textContent)) {
         el.setAttribute('data-threads-cta', '');
         el.style.setProperty('display', 'none', 'important');
       }
@@ -111,17 +122,20 @@
   run();
 
   const observer = new MutationObserver(mutations => {
-    let touched = false;
+    let needsRun = false;
     for (const m of mutations) {
       for (const added of m.addedNodes) {
         if (added.nodeType === 1) {
-          run(added);
-          touched = true;
+          needsRun = true;
+          break;
         }
       }
+      if (needsRun) break;
     }
-    if (!touched) {
-      // Maybe Threads re-locked scroll or re-showed a hidden element.
+    if (needsRun) {
+      run();
+    } else {
+      // Check for scroll re-lock or buttons re-rendered.
       unlockScroll();
       hideStandaloneCTAs();
     }
