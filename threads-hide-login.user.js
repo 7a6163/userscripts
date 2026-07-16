@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.5.1
+// @version      1.5.2
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -63,8 +63,10 @@
   }
 
   // --- Overlay hiding ----------------------------------------------------
-  // Always searches the full document (not just the added node) since the
-  // overlay may already exist or be split across separately added nodes.
+  // Always searches the full document. Finds the hero text, then climbs to:
+  //  1. The nearest position:fixed/absolute ancestor (overlay layer), or
+  //  2. The nearest ancestor that also contains a Close button, or
+  //  3. The direct child of <body> (last resort).
   function hideOverlay() {
     // Fast path: check span[dir="auto"] first (desktop).
     let hero = [...document.querySelectorAll('span[dir="auto"]')].find(el =>
@@ -84,18 +86,25 @@
 
     let node = hero;
     let fixedAncestor = null;
+    let lastBeforeBody = null;
     while (node && node.parentElement) {
       node = node.parentElement;
       if (node === document.body) break;
+      lastBeforeBody = node;
       const pos = getComputedStyle(node).position;
       if (pos === 'fixed' || pos === 'absolute') {
         fixedAncestor = node;
         break;
       }
+      // Check if this ancestor contains a Close button (overlay signal).
+      if (node.querySelector('[aria-label="Close"]')) {
+        fixedAncestor = node;
+        break;
+      }
     }
 
-    const target = fixedAncestor || node;
-    if (target && target !== document.body && !target.hasAttribute('data-threads-overlay')) {
+    const target = fixedAncestor || lastBeforeBody;
+    if (target && !target.hasAttribute('data-threads-overlay')) {
       target.setAttribute('data-threads-overlay', '');
       target.style.setProperty('display', 'none', 'important');
       unlockScroll();
