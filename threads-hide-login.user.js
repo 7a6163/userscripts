@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.1.0
-// @description  Hides the login/CTA overlay on threads.net and threads.com (desktop + mobile)
+// @version      1.2.0
+// @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
 // @match        https://www.threads.com/*
@@ -16,11 +16,12 @@
   'use strict';
 
   // Inject CSS early so the overlay never flashes. The JS below tags the
-  // overlay container with [data-threads-login-overlay]; this rule hides it
-  // before paint whenever the attribute is set.
+  // overlay container with [data-threads-login-overlay] and standalone CTA
+  // buttons with [data-threads-cta]; these rules hide them before paint.
   const style = document.createElement('style');
   style.textContent = `
-    [data-threads-login-overlay] { display: none !important; }
+    [data-threads-login-overlay],
+    [data-threads-cta] { display: none !important; }
   `;
   (document.head || document.documentElement).appendChild(style);
 
@@ -41,6 +42,17 @@
     /\bOpen (the )?app\b/,
     /\bGet the app\b/,
     /\bOpen Threads\b/,
+  ];
+  // Standalone button labels that appear outside the main overlay (e.g. in a
+  // sticky bottom bar or header): "Log in" / "Login" and "Open App".
+  // We match the button's own text, not subtree text, to avoid hiding large
+  // containers that merely mention these words.
+  const BUTTON_PATTERNS = [
+    /^Log ?in$/i,
+    /^Open (the )?app$/i,
+    /^Get the app$/i,
+    /^Open Threads$/i,
+    /^Continue with Instagram$/i,
   ];
 
   function matchesAny(text, patterns) {
@@ -74,23 +86,56 @@
     return false;
   }
 
+  // Hide standalone Login / Open App buttons that live outside the main
+  // overlay (e.g. in a sticky bottom bar or header). We target interactive
+  // elements whose direct text matches one of BUTTON_PATTERNS.
+  function hideStandaloneCTAs(root) {
+    const scope = root || document;
+    const candidates = scope.querySelectorAll(
+      '[role="button"], button, a[href]'
+    );
+    for (const el of candidates) {
+      if (el.hasAttribute('data-threads-cta')) continue;
+      // Use the element's own direct text, not subtree text, so we don't
+      // accidentally hide large wrappers.
+      const ownText = [...el.childNodes]
+        .filter(n => n.nodeType === 3 || (n.nodeType === 1 && n.tagName === 'SPAN'))
+        .map(n => n.textContent.trim())
+        .join(' ')
+        .trim();
+      const label = ownText || el.textContent.trim();
+      if (matchesAny(label, BUTTON_PATTERNS)) {
+        // Climb one level up so we hide the button + its decorative wrapper
+        // (Threads wraps buttons in extra divs for styling).
+        const target = el.parentElement && el.parentElement.childElementCount === 1
+          ? el.parentElement
+          : el;
+        target.setAttribute('data-threads-cta', '');
+        target.style.setProperty('display', 'none', 'important');
+      }
+    }
+  }
+
   // Try immediately in case DOM is already parsed.
   hideOverlay();
+  hideStandaloneCTAs();
 
-  // Watch for the overlay being injected dynamically.
+  // Watch for the overlay / CTAs being injected dynamically.
   const observer = new MutationObserver(mutations => {
     for (const m of mutations) {
       for (const added of m.addedNodes) {
-        if (added.nodeType === 1 && hideOverlay(added)) return;
+        if (added.nodeType !== 1) continue;
+        hideOverlay(added);
+        hideStandaloneCTAs(added);
       }
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  // Stop observing once we've hidden it, to avoid ongoing work.
-  // (Re-armed on SPA navigation below.)
+  // Re-run on client-side navigations.
   function arm() {
     hideOverlay();
+    hideStandaloneCTAs();
   }
   // Re-run on client-side navigations.
   let lastUrl = location.href;
