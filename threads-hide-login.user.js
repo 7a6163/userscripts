@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.5.0
+// @version      1.5.1
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -32,6 +32,7 @@
     'open app',
     'open the app',
     'get the app',
+    'get app',
     'open threads',
     'log in',
     'login',
@@ -62,14 +63,23 @@
   }
 
   // --- Overlay hiding ----------------------------------------------------
-  // Strategy: find hero text, then climb to the nearest position:fixed
-  // ancestor (the overlay layer). If none, climb to the nearest ancestor
-  // that is a direct child of <body>. This avoids hiding the main content.
-  function hideOverlay(root) {
-    const scope = root || document;
-    const hero = [...scope.querySelectorAll('span[dir="auto"]')].find(el =>
+  // Always searches the full document (not just the added node) since the
+  // overlay may already exist or be split across separately added nodes.
+  function hideOverlay() {
+    // Fast path: check span[dir="auto"] first (desktop).
+    let hero = [...document.querySelectorAll('span[dir="auto"]')].find(el =>
       isHeroText(el.textContent)
     );
+    // Fallback: search all leaf elements (mobile may use different tags).
+    if (!hero) {
+      const leaves = document.querySelectorAll('div, span, p, h1, h2');
+      for (const el of leaves) {
+        if (el.childElementCount === 0 && isHeroText(el.textContent)) {
+          hero = el;
+          break;
+        }
+      }
+    }
     if (!hero) return false;
 
     let node = hero;
@@ -113,9 +123,9 @@
   }
 
   // --- Orchestration -----------------------------------------------------
-  function run(root) {
-    hideOverlay(root);
-    hideStandaloneCTAs(root);
+  function run() {
+    hideOverlay();
+    hideStandaloneCTAs();
     unlockScroll();
   }
 
