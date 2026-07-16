@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.3.0
+// @version      1.4.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -15,62 +15,43 @@
 (function () {
   'use strict';
 
-  // --- CSS ---------------------------------------------------------------
-  // Tag-based rules so the JS can mark elements and they get hidden before
-  // the next paint. Also force-restore scrolling: Threads locks body/html
-  // overflow when the overlay is open.
   const style = document.createElement('style');
   style.textContent = `
     [data-threads-overlay],
     [data-threads-cta] { display: none !important; }
-
-    /* Restore scrolling that Threads disables when the overlay is shown */
-    html[data-threads-scrolllock],
-    body[data-threads-scrolllock] {
-      overflow: auto !important;
-      position: static !important;
-      height: auto !important;
-      inset: auto !important;
-    }
   `;
   (document.head || document.documentElement).appendChild(style);
 
   // --- Patterns ----------------------------------------------------------
-  // Hero text that only appears in the login/CTA overlay.
   const HERO_PATTERNS = [
     /^Say more with Threads$/,
     /^Get the full app experience( in the Threads app)?$/,
   ];
-  // CTA button text (used to identify the overlay container and standalone
-  // buttons). Matched against the button's full text content.
-  const CTA_PATTERNS = [
-    /Continue with Instagram/i,
-    /\bOpen (the )?app\b/i,
-    /\bGet the app\b/i,
-    /\bOpen Threads\b/i,
-    /^Log ?in$/i,
-    /^Sign up$/i,
-    /^Use the app$/i,
+  // Exact button labels (matched against the element's own text, not subtree).
+  const BUTTON_LABELS = [
+    'Continue with Instagram',
+    'Open app',
+    'Open the app',
+    'Get the app',
+    'Open Threads',
+    'Log in',
+    'Login',
+    'Sign up',
+    'Use the app',
   ];
 
-  function matchesAny(text, patterns) {
-    return patterns.some(p => p.test(text));
+  function isButtonLabel(text) {
+    const t = text.trim().replace(/\s+/g, ' ').toLowerCase();
+    return BUTTON_LABELS.some(lbl => t === lbl.toLowerCase());
   }
 
-  // --- Scroll lock removal ----------------------------------------------
+  // --- Scroll lock removal (overflow only) -------------------------------
   function unlockScroll() {
-    const attrs = ['data-threads-scrolllock'];
     for (const el of [document.documentElement, document.body]) {
       if (!el) continue;
-      // Remove inline overflow/position locks Threads sets via JS.
-      el.style.removeProperty('overflow');
-      el.style.removeProperty('position');
-      el.style.removeProperty('height');
-      el.style.removeProperty('inset');
-      el.style.setProperty('overflow', 'auto', 'important');
-      // Tag so the CSS rule above keeps it unlocked even if Threads
-      // re-applies inline styles.
-      el.setAttribute(attrs[0], '');
+      if (el.style.overflow === 'hidden' || getComputedStyle(el).overflow === 'hidden') {
+        el.style.setProperty('overflow', 'auto', 'important');
+      }
     }
   }
 
@@ -78,19 +59,15 @@
   function hideOverlay(root) {
     const scope = root || document;
     const hero = [...scope.querySelectorAll('span[dir="auto"]')].find(el =>
-      matchesAny(el.textContent.trim(), HERO_PATTERNS)
+      HERO_PATTERNS.some(p => p.test(el.textContent.trim()))
     );
     if (!hero) return false;
 
-    // Climb to the outer overlay container: the ancestor that also contains
-    // a CTA button.
+    // Climb to the first ancestor that is a direct child of <body> — that's
+    // the overlay container. Don't climb past body.
     let node = hero;
     while (node && node.parentElement && node.parentElement !== document.body) {
       node = node.parentElement;
-      const spans = [...node.querySelectorAll('span[dir="auto"]')];
-      const hasCta = spans.some(s => matchesAny(s.textContent, CTA_PATTERNS));
-      const hasButton = node.querySelector('[role="button"], a[href], button');
-      if (hasButton && hasCta) break;
     }
     if (node && node !== document.body && !node.hasAttribute('data-threads-overlay')) {
       node.setAttribute('data-threads-overlay', '');
@@ -102,9 +79,8 @@
   }
 
   // --- Standalone CTA hiding --------------------------------------------
-  // Hide Login / Open App buttons that live outside the overlay, e.g. in a
-  // sticky bottom bar. We look for interactive elements whose text matches,
-  // then hide the button and its immediate wrapper.
+  // Only hide the button element itself (no climbing). Match against the
+  // element's direct text content to avoid hiding large containers.
   function hideStandaloneCTAs(root) {
     const scope = root || document;
     const candidates = scope.querySelectorAll(
@@ -113,25 +89,14 @@
     for (const el of candidates) {
       if (el.closest('[data-threads-overlay]')) continue;
       if (el.hasAttribute('data-threads-cta')) continue;
-      const label = el.textContent.trim();
-      if (matchesAny(label, CTA_PATTERNS)) {
-        // Climb to the nearest wrapper that is a flex/grid item so we hide
-        // the button + its decorative padding wrapper, not a huge container.
-        let target = el;
-        // If the parent only contains this button (plus decorative siblings
-        // like icons), hide the parent instead.
-        let p = el.parentElement;
-        while (p && p !== document.body) {
-          const interactive = p.querySelectorAll(':scope > [role="button"], :scope > button, :scope > a[href]');
-          if (interactive.length === 1 && interactive[0] === el) {
-            target = p;
-            p = p.parentElement;
-          } else {
-            break;
-          }
-        }
-        target.setAttribute('data-threads-cta', '');
-        target.style.setProperty('display', 'none', 'important');
+      // Get the element's own text (direct text nodes + immediate span children).
+      const ownText = [...el.childNodes]
+        .filter(n => n.nodeType === 3 || (n.nodeType === 1 && n.tagName === 'SPAN'))
+        .map(n => n.textContent.trim())
+        .join(' ');
+      if (isButtonLabel(ownText)) {
+        el.setAttribute('data-threads-cta', '');
+        el.style.setProperty('display', 'none', 'important');
       }
     }
   }
@@ -143,27 +108,29 @@
     unlockScroll();
   }
 
-  // Initial pass.
   run();
 
-  // Observe DOM mutations so dynamically injected overlays/CTAs get hidden.
   const observer = new MutationObserver(mutations => {
+    let touched = false;
     for (const m of mutations) {
       for (const added of m.addedNodes) {
-        if (added.nodeType === 1) run(added);
+        if (added.nodeType === 1) {
+          run(added);
+          touched = true;
+        }
       }
     }
-    // Also catch Threads re-applying scroll locks via attribute changes.
-    unlockScroll();
+    if (!touched) {
+      // Maybe Threads re-locked scroll or re-showed a hidden element.
+      unlockScroll();
+      hideStandaloneCTAs();
+    }
   });
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
-    attributes: true,
-    attributeFilter: ['style', 'class'],
   });
 
-  // Re-run on SPA navigations.
   let lastUrl = location.href;
   setInterval(() => {
     if (location.href !== lastUrl) {
