@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.8.1
+// @version      1.8.2
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -110,5 +110,17 @@
   new MutationObserver(() => run()).observe(document.documentElement, {
     childList: true,
     subtree: true,
+    characterData: true,
   });
+
+  // Delayed CTA/overlay injection on cold loads: re-run on load and poll
+  // briefly until the page settles.
+  window.addEventListener('load', run);
+  document.addEventListener('DOMContentLoaded', run);
+
+  let ticks = 0;
+  const settle = setInterval(() => {
+    run();
+    if (++ticks >= 20) clearInterval(settle);
+  }, 250);
 })();
