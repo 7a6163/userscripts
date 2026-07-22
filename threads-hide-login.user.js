@@ -8,6 +8,8 @@
 // @match        https://www.threads.com/*
 // @run-at       document-start
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/7a6163/userscripts/main/threads-hide-login.user.js
+// @downloadURL  https://raw.githubusercontent.com/7a6163/userscripts/main/threads-hide-login.user.js
 // ==/UserScript==
 
 (function () {
