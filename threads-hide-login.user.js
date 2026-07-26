@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.8.2
+// @version      1.8.3
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -107,22 +107,42 @@
     unlockScroll();
   }
 
+  // Collapse bursts of mutations into one run on the next microtask. Avoids
+  // hammering querySelectorAll on every attribute tweak (iOS WKWebView jank).
+  let scheduled = false;
+  function scheduleRun() {
+    if (scheduled) return;
+    scheduled = true;
+    Promise.resolve().then(() => { scheduled = false; run(); });
+  }
+
   run();
 
-  new MutationObserver(() => run()).observe(document.documentElement, {
+  // Permanent observer: catches React injecting the overlay any time, even
+  // long after load on slow iOS cold hydration.
+  new MutationObserver(scheduleRun).observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
   });
 
-  // Delayed CTA/overlay injection on cold loads: re-run on load and poll
-  // briefly until the page settles.
+  // Event triggers covering iOS-specific timing gaps:
+  //  - DOMContentLoaded / load: standard late-injection points.
+  //  - pageshow: fires on bfcache restore (common on iOS Safari), where
+  //    no DOM mutations occur so the observer stays silent.
+  //  - visibilitychange: re-run when returning to foreground.
+  //  - readystatechange: covers scripts injected after document-end.
   window.addEventListener('load', run);
   document.addEventListener('DOMContentLoaded', run);
+  window.addEventListener('pageshow', run);
+  window.addEventListener('visibilitychange', () => { if (!document.hidden) run(); });
+  document.addEventListener('readystatechange', run);
 
+  // Long settle poll: iOS cold hydration can take well over the original 5s
+  // window. Poll for ~30s as a reliable backup alongside the observer.
   let ticks = 0;
   const settle = setInterval(() => {
     run();
-    if (++ticks >= 20) clearInterval(settle);
-  }, 250);
+    if (++ticks >= 100) clearInterval(settle);
+  }, 300);
 })();
