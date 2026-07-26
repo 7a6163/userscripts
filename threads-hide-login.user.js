@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.8.3
+// @version      1.8.4
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
