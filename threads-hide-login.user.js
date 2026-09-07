@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.10.1
+// @version      1.10.2
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -396,6 +396,33 @@
   // Main routine
   // -----------------------------------------------------------------------
 
+  // -----------------------------------------------------------------------
+  // Overlay 回收
+  // SPA 導航後 Threads 可能在先前被隱藏的容器內放入新內容（如 media
+  // viewer）。若已標記的 overlay 容器不再包含登入 dialog，解除隱藏。
+  // -----------------------------------------------------------------------
+
+  function releaseStaleOverlays() {
+    const marked = document.querySelectorAll(
+      '[data-threads-overlay]'
+    );
+
+    for (const el of marked) {
+      // 容器內仍有未處理的登入 dialog → 繼續隱藏。
+      const hasLogin = Array.from(
+        el.querySelectorAll('[role="dialog"], [aria-modal="true"]')
+      ).some(d => d !== el && isLoginDialog(d));
+
+      if (hasLogin) {
+        continue;
+      }
+
+      // 容器已無登入內容（可能已被 SPA 換成 media viewer），解除隱藏。
+      el.removeAttribute('data-threads-overlay');
+      el.style.removeProperty('display');
+    }
+  }
+
   function run() {
     // CSS 可能尚未注入，或被 Threads hydration 移除。
     ensureStyle();
@@ -404,6 +431,7 @@
       return;
     }
 
+    releaseStaleOverlays();
     hideOverlay();
     hideSidebarLogin();
     hideStandaloneCTAs();
