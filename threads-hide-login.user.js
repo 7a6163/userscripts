@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.3
+// @version      2.0.4
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -399,13 +399,20 @@
       return false;
     }
 
-    const rect = element.getBoundingClientRect();
+    // 已被我們隱藏的元素量不到版面（display:none 會讓 rect 歸零），
+    // 若在此重新套用滿版條件就會判定它不再是遮罩而還原，下一輪又
+    // 符合條件再隱藏，造成畫面明暗交替閃爍。
+    // 隱藏後 position 與 background 仍可正確讀取，因此改以這些條件判斷；
+    // 若節點被 React 回收去裝別的內容，上面的子節點與文字檢查會攔下。
+    if (!hiddenElements.has(element)) {
+      const rect = element.getBoundingClientRect();
 
-    if (
-      rect.width < window.innerWidth * 0.9 ||
-      rect.height < window.innerHeight * 0.9
-    ) {
-      return false;
+      if (
+        rect.width < window.innerWidth * 0.9 ||
+        rect.height < window.innerHeight * 0.9
+      ) {
+        return false;
+      }
     }
 
     const style = getComputedStyle(element);
@@ -483,6 +490,18 @@
 
       // 彈窗內的登入面板由 collectLoginDialogs 處理。
       if (el.closest('[role="dialog"], [aria-modal="true"]')) {
+        continue;
+      }
+
+      // 若此文字已位於我們隱藏的容器內，直接沿用原本的目標，不要重新
+      // 往上爬：容器被隱藏後量到的寬度是 0，寬度上限永遠不成立，迴圈
+      // 會一路往上爬而每輪隱藏更大的容器。
+      // 若 React 把容器回收去裝別的內容，文字就不再符合 SIDEBAR_PATTERNS，
+      // 這個候選不再出現，容器便會被還原。
+      const hiddenAncestor = el.closest('[' + HIDDEN_ATTR + ']');
+
+      if (hiddenAncestor) {
+        targets.add(hiddenAncestor);
         continue;
       }
 
