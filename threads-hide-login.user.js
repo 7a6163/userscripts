@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.5
+// @version      2.0.6
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -555,6 +555,13 @@
     }
   }
 
+  // 只隱藏按鈕本身，絕不往上隱藏容器。
+  //
+  // 原本會往上尋找「只含登入 CTA 的容器」來一併隱藏，理由是避免留下空白。
+  // 但那個最佳化的代價遠大於收益：容器是結構性的，隱藏它會讓版面重排，
+  // 絕對定位的元素跟著位移、事件層錯位，在行動裝置上會出現看不見卻擋住
+  // 拖曳的區塊。留言底部的「Log in to see more replies.」整塊被吃掉就是
+  // 這樣來的。留下空白容器遠比破壞版面安全。
   function collectStandaloneCTAs(targets) {
     const controls = document.querySelectorAll(
       '[role="button"], button, a[href]'
@@ -565,53 +572,8 @@
         continue;
       }
 
-      // 播放器內的 CTA 只隱藏按鈕本身。若往上隱藏容器會壓垮播放器的
-      // flex 版面，導致影片被擠成一條細線。
-      const enclosingDialog = element.closest(
-        '[role="dialog"], [aria-modal="true"]'
-      );
-
-      const insideMediaViewer =
-        enclosingDialog && isMediaViewer(enclosingDialog);
-
-      let hideTarget = element;
-
-      if (!insideMediaViewer) {
-        let node = element;
-
-        // 往上尋找只包含登入/App CTA 的容器，避免隱藏後留下空白。
-        for (let i = 0; i < MAX_CLIMB; i += 1) {
-          const parent = node.parentElement;
-
-          if (!parent || parent === document.body) {
-            break;
-          }
-
-          if (!isSafeToHide(parent)) {
-            break;
-          }
-
-          const interactive = Array.from(
-            parent.querySelectorAll(
-              '[role="button"], button, a[href]'
-            )
-          );
-
-          // 容器中若有非登入 CTA，就不能再往上隱藏。
-          if (
-            !interactive.length ||
-            !interactive.every(isButtonLabel)
-          ) {
-            break;
-          }
-
-          node = parent;
-          hideTarget = parent;
-        }
-      }
-
-      if (isSafeToHide(hideTarget)) {
-        targets.add(hideTarget);
+      if (isSafeToHide(element)) {
+        targets.add(element);
       }
     }
   }
