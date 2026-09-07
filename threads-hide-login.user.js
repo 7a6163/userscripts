@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.0
+// @version      2.0.1
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -381,6 +381,66 @@
     return target;
   }
 
+  // 登入彈窗的遮罩不在 dialog 的祖先鏈上，而是它旁邊的兄弟節點，
+  // 因此往上尋找容器永遠碰不到它，只能靠外觀特徵辨識。
+  //
+  // 遮罩特徵：fixed/absolute + 半透明 + 近乎滿版 + 葉節點（無子節點也無文字）。
+  // 播放器的黑色底也是滿版 fixed，但它不透明且含子節點與 video，不會誤中。
+  const COLOR_PATTERN =
+    /^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(?:,\s*([\d.]+)\s*)?\)$/;
+
+  function isBackdrop(element) {
+    // 由便宜到昂貴排序，讓絕大多數元素在前兩步就被排除。
+    if (element.children.length) {
+      return false;
+    }
+
+    if (String(element.textContent || '').trim()) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+
+    if (
+      rect.width < window.innerWidth * 0.9 ||
+      rect.height < window.innerHeight * 0.9
+    ) {
+      return false;
+    }
+
+    const style = getComputedStyle(element);
+
+    if (
+      style.position !== 'fixed' &&
+      style.position !== 'absolute'
+    ) {
+      return false;
+    }
+
+    const match = COLOR_PATTERN.exec(style.backgroundColor);
+
+    if (!match) {
+      return false;
+    }
+
+    const alpha = match[1] === undefined ? 1 : parseFloat(match[1]);
+
+    // 完全不透明的滿版元素是實體背景（例如播放器底色），不是遮罩。
+    return alpha > 0 && alpha < 1;
+  }
+
+  function collectBackdrops(targets) {
+    for (const element of document.querySelectorAll('div')) {
+      if (!isBackdrop(element)) {
+        continue;
+      }
+
+      if (isSafeToHide(element)) {
+        targets.add(element);
+      }
+    }
+  }
+
   function collectLoginDialogs(targets) {
     const dialogs = document.querySelectorAll(
       '[role="dialog"], [aria-modal="true"]'
@@ -524,6 +584,7 @@
     const targets = new Set();
 
     collectLoginDialogs(targets);
+    collectBackdrops(targets);
     collectSidebarPanels(targets);
     collectStandaloneCTAs(targets);
     collectNav(targets);
