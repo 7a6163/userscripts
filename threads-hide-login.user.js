@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.9.0
+// @version      1.10.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -82,6 +82,13 @@
     /^在 Threads 应用中享受完整体验$/,
   ];
 
+  // 右側邊欄登入面板的標題文字。
+  const SIDEBAR_PATTERNS = [
+    /^Log in or sign up for Threads$/i,
+    /^登入或註冊 Threads$/,
+    /^登录或注册 Threads$/,
+  ];
+
   const BUTTON_LABELS = new Set([
     // English
     'continue with instagram',
@@ -95,6 +102,8 @@
     'sign in',
     'sign up',
     'use the app',
+    'log in with username instead',
+    'log in with username instead.',
 
     // 繁體中文
     '使用 instagram 繼續',
@@ -111,6 +120,8 @@
     '註冊',
     '使用 app',
     '使用應用程式',
+    '改用使用者名稱登入',
+    '改用使用者名稱登入。',
 
     // 簡體中文
     '使用 instagram 继续',
@@ -125,6 +136,8 @@
     '注册',
     '使用 app',
     '使用应用',
+    '改用用户名登录',
+    '改用用户名登录。',
   ]);
 
   function norm(value) {
@@ -144,9 +157,22 @@
   }
 
   function isButtonLabel(element) {
-    return getElementLabels(element).some(value => {
+    if (getElementLabels(element).some(value => {
       return BUTTON_LABELS.has(norm(value));
-    });
+    })) {
+      return true;
+    }
+
+    // 按鈕的 textContent 可能會把 icon 文字串接在一起（如
+    // "InstagramContinue with Instagram"），逐一檢查直接子節點的文字。
+    for (const child of element.childNodes) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const t = norm(child.textContent);
+        if (t && BUTTON_LABELS.has(t)) return true;
+      }
+    }
+
+    return false;
   }
 
   function isHeroText(element) {
@@ -264,6 +290,42 @@
   }
 
   // -----------------------------------------------------------------------
+  // Sidebar login panel hiding
+  // 右側邊欄的「登入或註冊 Threads」面板不是 dialog，需要獨立偵測。
+  // -----------------------------------------------------------------------
+
+  function hideSidebarLogin() {
+    const candidates = document.querySelectorAll(
+      'span[dir="auto"], div[dir="auto"], h1, h2, h3, span'
+    );
+
+    for (const el of candidates) {
+      const text = String(el.textContent || '').trim();
+
+      if (!SIDEBAR_PATTERNS.some(p => p.test(text))) {
+        continue;
+      }
+
+      // 向上尋找 sticky/fixed 的面板容器，但不超過合理大小。
+      // 面板本身約 300–400px 寬，若容器太大代表已超出面板範圍。
+      let panel = el;
+
+      while (panel.parentElement && panel.parentElement !== document.body) {
+        const w = panel.parentElement.getBoundingClientRect().width;
+        if (w > 500) break;
+        panel = panel.parentElement;
+      }
+
+      if (panel.hasAttribute('data-threads-cta')) {
+        continue;
+      }
+
+      panel.setAttribute('data-threads-cta', '');
+      setImportant(panel, 'display', 'none');
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Standalone CTA hiding
   // -----------------------------------------------------------------------
 
@@ -331,6 +393,7 @@
     }
 
     hideOverlay();
+    hideSidebarLogin();
     hideStandaloneCTAs();
     unlockScroll();
   }
