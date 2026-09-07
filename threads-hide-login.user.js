@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.10.3
+// @version      1.11.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -175,6 +175,60 @@
     return false;
   }
 
+  // 媒體播放器控制項的 aria-label。這些控制項與播放器外殼一起渲染，
+  // 早於 <video> 插入 DOM，因此比偵測 video 更不受 SPA 導航時序影響。
+  const MEDIA_CONTROL_LABELS = [
+    'play video',
+    'play',
+    'pause',
+    'mute',
+    'unmute',
+    'playback speed',
+
+    '播放影片',
+    '播放',
+    '暫停',
+    '靜音',
+    '取消靜音',
+    '播放速度',
+
+    '播放视频',
+    '暂停',
+    '静音',
+    '取消静音',
+  ];
+
+  function isMediaControlLabel(label) {
+    return MEDIA_CONTROL_LABELS.some(name => {
+      return (
+        label === name ||
+        label.startsWith(name + ':') ||
+        label.startsWith(name + '：')
+      );
+    });
+  }
+
+  // 判斷元素是否為（或包含）媒體播放器。
+  function isMediaViewer(element) {
+    if (element.querySelector('video')) {
+      return true;
+    }
+
+    const controls = element.querySelectorAll(
+      '[role="button"], button'
+    );
+
+    for (const control of controls) {
+      const label = norm(control.getAttribute('aria-label'));
+
+      if (label && isMediaControlLabel(label)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function isHeroText(element) {
     const values = [
       element.textContent,
@@ -242,8 +296,9 @@
   }
 
   function isLoginDialog(dialog) {
-    // 含有 video 的 dialog 是媒體播放器，不是登入彈窗。
-    if (dialog.querySelector('video')) {
+    // 媒體播放器不是登入彈窗。訪客模式下 Threads 會在播放器內放置
+    // 登入 CTA，因此必須先排除播放器，否則會誤判並把播放器隱藏。
+    if (isMediaViewer(dialog)) {
       return false;
     }
 
@@ -301,8 +356,8 @@
         wrapper = wrapper.parentElement;
       }
 
-      // 若 wrapper 內有 video，只隱藏 dialog 本身。
-      if (wrapper.querySelector('video') && wrapper !== dialog) {
+      // 若 wrapper 內有媒體播放器，只隱藏 dialog 本身。
+      if (isMediaViewer(wrapper) && wrapper !== dialog) {
         dialog.setAttribute('data-threads-overlay', '');
         setImportant(dialog, 'display', 'none');
       } else {
@@ -374,9 +429,18 @@
 
       let hideTarget = element;
 
+      // 播放器內的 CTA 只隱藏按鈕本身。若往上隱藏容器會壓垮播放器的
+      // flex 版面，導致影片被擠成一條細線。
+      const enclosingDialog = element.closest(
+        '[role="dialog"], [aria-modal="true"]'
+      );
+
+      const insideMediaViewer =
+        enclosingDialog && isMediaViewer(enclosingDialog);
+
       // 往上尋找只包含登入/App CTA 的容器，避免隱藏後留下空白。
       for (
-        let node = element.parentElement;
+        let node = insideMediaViewer ? null : element.parentElement;
         node && node !== document.body;
         node = node.parentElement
       ) {
@@ -421,8 +485,8 @@
     );
 
     for (const el of marked) {
-      // 容器內出現 video → SPA 已切換到媒體播放器，優先顯示。
-      if (el.querySelector('video')) {
+      // 容器內出現媒體播放器 → SPA 已切換，優先顯示。
+      if (isMediaViewer(el)) {
         el.removeAttribute('data-threads-overlay');
         el.style.removeProperty('display');
         continue;
