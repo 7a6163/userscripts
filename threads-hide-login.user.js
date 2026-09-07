@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.1.0
+// @version      2.1.1
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -805,10 +805,22 @@
     passive: true,
   });
 
-  // 登入牆常在捲動一段後才跳出。此時可能只改寫 overflow 而不動 DOM，
+  // 登入牆常在捲動一段後才跳出，此時可能只改寫 overflow 而不動 DOM，
   // observer 收不到，settle poll 也已結束，因此必須在捲動時檢查。
-  // scheduleRun 本身有 150ms 下限與 rAF 節流，成本可控。
-  window.addEventListener('scroll', scheduleRun, { passive: true });
+  //
+  // 但捲動時只查捲動鎖，不做完整掃描。完整掃描排在 rAF 上執行會直接
+  // 推遲當前這一幀，捲動就會一頓一頓的。isScrollLocked 只讀 html 與
+  // body 兩個元素的 computed style，成本極低。
+  // 登入牆的視覺元素仍由 observer 觸發的完整掃描處理。
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (isScrollLocked()) {
+        unlockScroll();
+      }
+    },
+    { passive: true }
+  );
 
   window.addEventListener('pageshow', scheduleRun, { passive: true });
 
