@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.2
+// @version      2.0.3
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -728,18 +728,23 @@
 
   const observer = new MutationObserver(scheduleRun);
 
+  // 不要監聽 class / style / characterData。Threads 會為了動畫、播放進度、
+  // hover 等持續改寫它們，實測閒置時每秒就有約 4 次觸發，其中 9 成是 style，
+  // 而這些變動與登入彈窗完全無關。每次觸發都會排一次全頁掃描，在手機上
+  // 累積成持續卡頓。改為只監聽真正代表彈窗出現的訊號後，閒置時降為 0 次。
+  //
+  // 登入彈窗出現時必定伴隨 childList（React 掛載 portal）或 role/aria-modal
+  // 變動；hydration 期間才有的 class/style 變化則由下方的 poll 涵蓋。
+  //
+  // 附帶好處：我們自己寫 inline style 不再回頭觸發 observer。
   observer.observe(document, {
     childList: true,
     subtree: true,
-    characterData: true,
     attributes: true,
     attributeFilter: [
-      'class',
-      'style',
       'role',
-      'aria-label',
       'aria-modal',
-      'title',
+      'aria-label',
     ],
   });
 
