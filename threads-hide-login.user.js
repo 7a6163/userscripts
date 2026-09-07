@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.4
+// @version      2.0.5
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -335,13 +335,37 @@
     element.style.setProperty(property, value, 'important');
   }
 
+  // 捲動鎖定是登入彈窗造成的。沒有彈窗時絕不能改寫 overflow：
+  // body 原本是 overflow: visible，改成 auto 會讓它變成獨立的捲動容器，
+  // 在行動裝置上與頁面內容的觸控捲動互搶事件，留言就拖不動了。
+  let scrollUnlocked = false;
+
   function unlockScroll() {
+    if (scrollUnlocked) {
+      return;
+    }
+
     setImportant(document.documentElement, 'overflow', 'auto');
     setImportant(document.body, 'overflow', 'auto');
 
     // Threads 某些版本會用 overflow-y 或 overscroll-behavior 鎖定頁面。
     setImportant(document.documentElement, 'overflow-y', 'auto');
     setImportant(document.body, 'overflow-y', 'auto');
+
+    scrollUnlocked = true;
+  }
+
+  function restoreScroll() {
+    if (!scrollUnlocked) {
+      return;
+    }
+
+    for (const el of [document.documentElement, document.body]) {
+      el.style.removeProperty('overflow');
+      el.style.removeProperty('overflow-y');
+    }
+
+    scrollUnlocked = false;
   }
 
   // -----------------------------------------------------------------------
@@ -621,7 +645,7 @@
     collectStandaloneCTAs(targets);
     collectNav(targets);
 
-    return targets;
+    return { targets, hasLoginDialog };
   }
 
   // -----------------------------------------------------------------------
@@ -662,7 +686,7 @@
       return;
     }
 
-    const targets = collectTargets();
+    const { targets, hasLoginDialog } = collectTargets();
 
     // 還原：已從 DOM 移除，或這一輪不再符合條件的元素。
     for (const element of Array.from(hiddenElements)) {
@@ -680,8 +704,10 @@
       hideElement(element);
     }
 
-    if (targets.size) {
+    if (hasLoginDialog) {
       unlockScroll();
+    } else {
+      restoreScroll();
     }
   }
 
