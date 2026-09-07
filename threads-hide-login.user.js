@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.10.0
+// @version      1.10.1
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -242,6 +242,11 @@
   }
 
   function isLoginDialog(dialog) {
+    // 含有 video 的 dialog 是媒體播放器，不是登入彈窗。
+    if (dialog.querySelector('video')) {
+      return false;
+    }
+
     // 優先使用 Threads 的 hero 標題辨識。
     if (dialogContainsHero(dialog)) {
       return true;
@@ -282,8 +287,15 @@
         top = top.parentElement;
       }
 
-      top.setAttribute('data-threads-overlay', '');
-      setImportant(top, 'display', 'none');
+      // 若 top-level 容器同時包含 video，代表媒體播放器共用同一個
+      // portal，不能整個隱藏，只隱藏 dialog 本身。
+      if (top.querySelector('video') && top !== dialog) {
+        dialog.setAttribute('data-threads-overlay', '');
+        setImportant(dialog, 'display', 'none');
+      } else {
+        top.setAttribute('data-threads-overlay', '');
+        setImportant(top, 'display', 'none');
+      }
 
       unlockScroll();
     }
