@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.6
+// @version      2.1.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -36,6 +36,7 @@
   // -----------------------------------------------------------------------
 
   const HIDDEN_ATTR = 'data-threads-hidden';
+  const UNLOCK_ATTR = 'data-threads-scroll-unlock';
 
   const STYLE_ID = 'threads-hide-login-style';
 
@@ -43,6 +44,14 @@
   const STYLE_TEXT = `
     [${HIDDEN_ATTR}] {
       display: none !important;
+    }
+
+    /* 以屬性搭配 CSS 解鎖捲動，不寫 inline style，
+       這樣 element.style 讀到的永遠是 Threads 自己的設定。 */
+    html[${UNLOCK_ATTR}],
+    body[${UNLOCK_ATTR}] {
+      overflow: auto !important;
+      overflow-y: auto !important;
     }
 
     #barcelona-header {
@@ -335,23 +344,55 @@
     element.style.setProperty(property, value, 'important');
   }
 
-  // 捲動鎖定是登入彈窗造成的。沒有彈窗時絕不能改寫 overflow：
+  // 只在 Threads 真的鎖住捲動時才解鎖。沒鎖時絕不能改寫 overflow：
   // body 原本是 overflow: visible，改成 auto 會讓它變成獨立的捲動容器，
   // 在行動裝置上與頁面內容的觸控捲動互搶事件，留言就拖不動了。
   let scrollUnlocked = false;
+
+  // 判斷 Threads 是否鎖住捲動。
+  //
+  // 直接讀 computed style 會讀到我們自己的解鎖規則，形成「套用後就再也
+  // 測不到鎖」的循環。因此量測前先移除自己的屬性，量完再放回去；整段在
+  // 同一個同步區塊內完成，瀏覽器不會在中間繪製，不會閃爍。
+  function isScrollLocked() {
+    const elements = [document.documentElement, document.body];
+    const restore = [];
+
+    for (const el of elements) {
+      if (el.hasAttribute(UNLOCK_ATTR)) {
+        el.removeAttribute(UNLOCK_ATTR);
+        restore.push(el);
+      }
+    }
+
+    let locked = false;
+
+    for (const el of elements) {
+      const style = getComputedStyle(el);
+
+      if (
+        style.overflow === 'hidden' ||
+        style.overflowY === 'hidden'
+      ) {
+        locked = true;
+        break;
+      }
+    }
+
+    for (const el of restore) {
+      el.setAttribute(UNLOCK_ATTR, '');
+    }
+
+    return locked;
+  }
 
   function unlockScroll() {
     if (scrollUnlocked) {
       return;
     }
 
-    setImportant(document.documentElement, 'overflow', 'auto');
-    setImportant(document.body, 'overflow', 'auto');
-
-    // Threads 某些版本會用 overflow-y 或 overscroll-behavior 鎖定頁面。
-    setImportant(document.documentElement, 'overflow-y', 'auto');
-    setImportant(document.body, 'overflow-y', 'auto');
-
+    document.documentElement.setAttribute(UNLOCK_ATTR, '');
+    document.body.setAttribute(UNLOCK_ATTR, '');
     scrollUnlocked = true;
   }
 
@@ -360,11 +401,8 @@
       return;
     }
 
-    for (const el of [document.documentElement, document.body]) {
-      el.style.removeProperty('overflow');
-      el.style.removeProperty('overflow-y');
-    }
-
+    document.documentElement.removeAttribute(UNLOCK_ATTR);
+    document.body.removeAttribute(UNLOCK_ATTR);
     scrollUnlocked = false;
   }
 
@@ -666,7 +704,9 @@
       hideElement(element);
     }
 
-    if (hasLoginDialog) {
+    // 以捲動是否真的被鎖住為準。登入牆不一定用 role="dialog" 實作，
+    // 只看有沒有彈窗會漏掉純 div 覆蓋層 + body{overflow:hidden} 的情況。
+    if (hasLoginDialog || isScrollLocked()) {
       unlockScroll();
     } else {
       restoreScroll();
@@ -764,6 +804,11 @@
   document.addEventListener('DOMContentLoaded', scheduleRun, {
     passive: true,
   });
+
+  // 登入牆常在捲動一段後才跳出。此時可能只改寫 overflow 而不動 DOM，
+  // observer 收不到，settle poll 也已結束，因此必須在捲動時檢查。
+  // scheduleRun 本身有 150ms 下限與 rAF 節流，成本可控。
+  window.addEventListener('scroll', scheduleRun, { passive: true });
 
   window.addEventListener('pageshow', scheduleRun, { passive: true });
 
