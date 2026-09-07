@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.10.2
+// @version      1.10.3
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -263,7 +263,9 @@
     return isModal && dialogContainsLoginCTA(dialog);
   }
 
-  // 從登入 dialog 向上尋找 body 的直接子元素，隱藏整個 overlay portal。
+  // 從登入 dialog 向上尋找適當的容器來隱藏。
+  // 不隱藏 body 的直接子元素（portal root），因為 SPA 導航時
+  // Threads 可能在同一個 portal 內放入媒體播放器等新內容。
   function hideOverlay() {
     const dialogs = document.querySelectorAll(
       '[role="dialog"], [aria-modal="true"]'
@@ -278,23 +280,34 @@
         continue;
       }
 
-      let top = dialog;
+      // 找到 body 的直接子元素（portal root）。
+      let portalRoot = dialog;
 
       while (
-        top.parentElement &&
-        top.parentElement !== document.body
+        portalRoot.parentElement &&
+        portalRoot.parentElement !== document.body
       ) {
-        top = top.parentElement;
+        portalRoot = portalRoot.parentElement;
       }
 
-      // 若 top-level 容器同時包含 video，代表媒體播放器共用同一個
-      // portal，不能整個隱藏，只隱藏 dialog 本身。
-      if (top.querySelector('video') && top !== dialog) {
+      // 找到 portal root 的子元素中包含此 dialog 的那一層。
+      // 隱藏這一層而非整個 portal root，保留同層其他內容。
+      let wrapper = dialog;
+
+      while (
+        wrapper.parentElement &&
+        wrapper.parentElement !== portalRoot
+      ) {
+        wrapper = wrapper.parentElement;
+      }
+
+      // 若 wrapper 內有 video，只隱藏 dialog 本身。
+      if (wrapper.querySelector('video') && wrapper !== dialog) {
         dialog.setAttribute('data-threads-overlay', '');
         setImportant(dialog, 'display', 'none');
       } else {
-        top.setAttribute('data-threads-overlay', '');
-        setImportant(top, 'display', 'none');
+        wrapper.setAttribute('data-threads-overlay', '');
+        setImportant(wrapper, 'display', 'none');
       }
 
       unlockScroll();
@@ -408,6 +421,18 @@
     );
 
     for (const el of marked) {
+      // 容器內出現 video → SPA 已切換到媒體播放器，優先顯示。
+      if (el.querySelector('video')) {
+        el.removeAttribute('data-threads-overlay');
+        el.style.removeProperty('display');
+        continue;
+      }
+
+      // 被標記的元素本身就是登入 dialog → 維持隱藏。
+      if (isLoginDialog(el)) {
+        continue;
+      }
+
       // 容器內仍有未處理的登入 dialog → 繼續隱藏。
       const hasLogin = Array.from(
         el.querySelectorAll('[role="dialog"], [aria-modal="true"]')
