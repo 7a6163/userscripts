@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.0.1
+// @version      2.0.2
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -446,10 +446,14 @@
       '[role="dialog"], [aria-modal="true"]'
     );
 
+    let found = false;
+
     for (const dialog of dialogs) {
       if (!isLoginDialog(dialog)) {
         continue;
       }
+
+      found = true;
 
       const target = overlayTargetFor(dialog);
 
@@ -457,6 +461,8 @@
         targets.add(target);
       }
     }
+
+    return found;
   }
 
   function collectSidebarPanels(targets) {
@@ -583,8 +589,15 @@
   function collectTargets() {
     const targets = new Set();
 
-    collectLoginDialogs(targets);
-    collectBackdrops(targets);
+    const hasLoginDialog = collectLoginDialogs(targets);
+
+    // 遮罩掃描必須逐一取得版面與樣式，會觸發同步 reflow，是所有
+    // collector 中最貴的。遮罩只會與登入彈窗同時出現，因此只在確實
+    // 有登入彈窗時才掃描。彈窗被隱藏後仍留在 DOM，判斷依然成立。
+    if (hasLoginDialog) {
+      collectBackdrops(targets);
+    }
+
     collectSidebarPanels(targets);
     collectStandaloneCTAs(targets);
     collectNav(targets);
@@ -622,6 +635,14 @@
       return;
     }
 
+    // Threads 尚未完成初始化時什麼都不做，避免與 hydration 爭用主執行緒。
+    // 啟動畫面結束後 Threads 會把它收成 0 高度。
+    const splash = document.getElementById('barcelona-splash-screen');
+
+    if (splash && splash.getBoundingClientRect().height > 0) {
+      return;
+    }
+
     const targets = collectTargets();
 
     // 還原：已從 DOM 移除，或這一輪不再符合條件的元素。
@@ -650,7 +671,14 @@
   // 將同一批 mutation 合併成一次檢查。
   // -----------------------------------------------------------------------
 
+  // hydration 期間 Threads 會產生大量 mutation。若用 microtask 排程，
+  // microtask 佇列必須清空才會讓出主執行緒，掃描會把 CPU 佔滿而讓
+  // Threads 初始化跑不完（畫面卡在啟動畫面）。
+  // 改用 rAF 並限制最小間隔，確保每次掃描之間都把主執行緒讓回去。
+  const MIN_INTERVAL_MS = 150;
+
   let scheduled = false;
+  let lastRunAt = 0;
 
   function scheduleRun() {
     if (scheduled) {
@@ -659,8 +687,9 @@
 
     scheduled = true;
 
-    Promise.resolve().then(() => {
+    const fire = () => {
       scheduled = false;
+      lastRunAt = Date.now();
 
       try {
         run();
@@ -670,7 +699,21 @@
           error
         );
       }
-    });
+    };
+
+    const wait = Math.max(
+      0,
+      MIN_INTERVAL_MS - (Date.now() - lastRunAt)
+    );
+
+    if (wait > 0) {
+      window.setTimeout(
+        () => window.requestAnimationFrame(fire),
+        wait
+      );
+    } else {
+      window.requestAnimationFrame(fire);
+    }
   }
 
   // -----------------------------------------------------------------------
