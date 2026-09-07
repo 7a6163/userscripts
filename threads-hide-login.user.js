@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.2.0
+// @version      2.3.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -274,13 +274,18 @@
   }
 
   // 隱藏任何元素前的共同底線。
+  //
+  // 這裡曾經一併禁止隱藏 body 的直接子元素（React portal root），因為
+  // SPA 導航時它會被回收去裝媒體播放器。但登入牆的遮罩與事件攔截層正是
+  // 在那一層，禁止隱藏它就等於整面牆都拿不掉：登入卡片被藏了，擋住畫面
+  // 與鎖住捲動的那層卻還在，必須手動點一下才能恢復。
+  //
+  // 當初需要那條禁令，是因為當時既沒有可靠的播放器偵測，也沒有自我修復。
+  // 現在 isMediaViewer 以控制項的 aria-label 判斷（不受 video 載入時序
+  // 影響），而節點被回收後不再符合條件就會被還原，所以只留播放器這一條
+  // 底線就足夠。
   function isSafeToHide(element) {
     if (!element || element === document.body) {
-      return false;
-    }
-
-    // body 的直接子元素是 React portal root，SPA 導航時會被回收再利用。
-    if (element.parentElement === document.body) {
       return false;
     }
 
@@ -428,33 +433,30 @@
   // 爬到 portal root，把整頁（含影片）一起隱藏。
   const MAX_CLIMB = 6;
 
-  // 從登入 dialog 往上找到遮罩層，讓半透明背景一起消失。
-  // 撞到播放器、含影片的容器或 portal root 就停止。
+  // 從登入 dialog 一路往上找到 body 的直接子元素（React portal root）。
+  //
+  // 登入牆是一個完整的 portal：半透明遮罩、登入卡片、以及吃掉點擊的
+  // 攔截層都在同一個 portal 裡，彼此是兄弟而非祖先關係。只隱藏彈窗本身
+  // 或中間某一層，會留下擋住畫面並讓 Threads 持續鎖住捲動的外殼，使用者
+  // 得手動點一下才能繼續操作。
+  //
+  // 這是 v1.x 的作法，差別在於現在往上爬會被媒體播放器擋下。
   function overlayTargetFor(dialog) {
-    let target = dialog;
     let node = dialog;
 
-    for (let i = 0; i < MAX_CLIMB; i += 1) {
-      const parent = node.parentElement;
-
-      if (!parent || parent === document.body) {
+    while (
+      node.parentElement &&
+      node.parentElement !== document.body
+    ) {
+      // 撞到媒體播放器就停，不能把播放器一起隱藏。
+      if (!isSafeToHide(node.parentElement)) {
         break;
       }
 
-      if (!isSafeToHide(parent)) {
-        break;
-      }
-
-      node = parent;
-
-      // 固定定位的那一層通常就是包住遮罩與彈窗的整個 overlay。
-      if (getComputedStyle(node).position === 'fixed') {
-        target = node;
-        break;
-      }
+      node = node.parentElement;
     }
 
-    return target;
+    return node;
   }
 
   // 登入彈窗的遮罩不在 dialog 的祖先鏈上，而是它旁邊的兄弟節點，
