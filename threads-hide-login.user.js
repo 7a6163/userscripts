@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      1.11.0
+// @version      2.0.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -16,21 +16,36 @@
   'use strict';
 
   // -----------------------------------------------------------------------
+  // 設計原則
+  //
+  // 1. 每次執行都重新計算「現在該隱藏哪些元素」，再與目前已隱藏的集合比對。
+  //    不再符合條件的元素會被還原。Threads 是 SPA，React 會回收 DOM 節點，
+  //    一旦標記黏著就會發生「節點被換去裝影片但仍保持隱藏」的問題。
+  //
+  // 2. 絕不隱藏 body 的直接子元素（portal root），也絕不隱藏含有影片或
+  //    媒體播放器的容器。往上尋找容器時一律限制層數。
+  //
+  // 3. 往上找容器是最危險的操作：Threads 的版面幾乎整條鏈都是 flex，
+  //    對 flex 子項下 display:none 會讓兄弟節點重新分配空間而塌陷。
+  // -----------------------------------------------------------------------
+
+  // -----------------------------------------------------------------------
   // CSS injection
   // document-start 時 document.head / document.documentElement 可能尚未存在，
   // 因此不能直接 appendChild，必須等 DOM 根節點可用後再注入。
   // -----------------------------------------------------------------------
 
+  const HIDDEN_ATTR = 'data-threads-hidden';
+
   const STYLE_ID = 'threads-hide-login-style';
 
+  // nav 不放在 CSS，因為媒體播放器內也可能有 nav，必須在 JS 逐一判斷。
   const STYLE_TEXT = `
-    [data-threads-overlay],
-    [data-threads-cta] {
+    [${HIDDEN_ATTR}] {
       display: none !important;
     }
 
-    #barcelona-header,
-    nav {
+    #barcelona-header {
       display: none !important;
     }
 
@@ -175,8 +190,25 @@
     return false;
   }
 
-  // 媒體播放器控制項的 aria-label。這些控制項與播放器外殼一起渲染，
-  // 早於 <video> 插入 DOM，因此比偵測 video 更不受 SPA 導航時序影響。
+  function isHeroText(element) {
+    const values = [
+      element.textContent,
+      element.getAttribute('aria-label'),
+    ];
+
+    return values.some(value => {
+      const text = String(value || '').trim();
+      return HERO_PATTERNS.some(pattern => pattern.test(text));
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Media viewer detection
+  //
+  // 媒體播放器控制項的 aria-label 與播放器外殼一起渲染，早於 <video>
+  // 插入 DOM，因此比偵測 video 更不受 SPA 導航時序影響。
+  // -----------------------------------------------------------------------
+
   const MEDIA_CONTROL_LABELS = [
     'play video',
     'play',
@@ -229,50 +261,18 @@
     return false;
   }
 
-  function isHeroText(element) {
-    const values = [
-      element.textContent,
-      element.getAttribute('aria-label'),
-    ];
-
-    return values.some(value => {
-      const text = String(value || '').trim();
-      return HERO_PATTERNS.some(pattern => pattern.test(text));
-    });
-  }
-
-  // -----------------------------------------------------------------------
-  // Safe style modification
-  // 避免每次 run 都重設 style，否則 observer 監聽 style 時可能不斷觸發。
-  // -----------------------------------------------------------------------
-
-  function setImportant(element, property, value) {
-    if (!element) return;
-
-    const currentValue = element.style.getPropertyValue(property);
-    const currentPriority = element.style.getPropertyPriority(property);
-
-    if (
-      currentValue === value &&
-      currentPriority === 'important'
-    ) {
-      return;
+  // 隱藏任何元素前的共同底線。
+  function isSafeToHide(element) {
+    if (!element || element === document.body) {
+      return false;
     }
 
-    element.style.setProperty(property, value, 'important');
-  }
+    // body 的直接子元素是 React portal root，SPA 導航時會被回收再利用。
+    if (element.parentElement === document.body) {
+      return false;
+    }
 
-  // -----------------------------------------------------------------------
-  // Scroll lock removal
-  // -----------------------------------------------------------------------
-
-  function unlockScroll() {
-    setImportant(document.documentElement, 'overflow', 'auto');
-    setImportant(document.body, 'overflow', 'auto');
-
-    // Threads 某些版本會用 overflow-y 或 overscroll-behavior 鎖定頁面。
-    setImportant(document.documentElement, 'overflow-y', 'auto');
-    setImportant(document.body, 'overflow-y', 'auto');
+    return !isMediaViewer(element);
   }
 
   // -----------------------------------------------------------------------
@@ -318,66 +318,95 @@
     return isModal && dialogContainsLoginCTA(dialog);
   }
 
-  // 從登入 dialog 向上尋找適當的容器來隱藏。
-  // 不隱藏 body 的直接子元素（portal root），因為 SPA 導航時
-  // Threads 可能在同一個 portal 內放入媒體播放器等新內容。
-  function hideOverlay() {
+  // -----------------------------------------------------------------------
+  // Scroll lock removal
+  // -----------------------------------------------------------------------
+
+  function setImportant(element, property, value) {
+    if (!element) return;
+
+    const currentValue = element.style.getPropertyValue(property);
+    const currentPriority = element.style.getPropertyPriority(property);
+
+    if (currentValue === value && currentPriority === 'important') {
+      return;
+    }
+
+    element.style.setProperty(property, value, 'important');
+  }
+
+  function unlockScroll() {
+    setImportant(document.documentElement, 'overflow', 'auto');
+    setImportant(document.body, 'overflow', 'auto');
+
+    // Threads 某些版本會用 overflow-y 或 overscroll-behavior 鎖定頁面。
+    setImportant(document.documentElement, 'overflow-y', 'auto');
+    setImportant(document.body, 'overflow-y', 'auto');
+  }
+
+  // -----------------------------------------------------------------------
+  // 收集這一輪應該隱藏的元素
+  // -----------------------------------------------------------------------
+
+  // 往上尋找容器的最大層數。Threads 版面很深，無上限往上爬會直接
+  // 爬到 portal root，把整頁（含影片）一起隱藏。
+  const MAX_CLIMB = 6;
+
+  // 從登入 dialog 往上找到遮罩層，讓半透明背景一起消失。
+  // 撞到播放器、含影片的容器或 portal root 就停止。
+  function overlayTargetFor(dialog) {
+    let target = dialog;
+    let node = dialog;
+
+    for (let i = 0; i < MAX_CLIMB; i += 1) {
+      const parent = node.parentElement;
+
+      if (!parent || parent === document.body) {
+        break;
+      }
+
+      if (!isSafeToHide(parent)) {
+        break;
+      }
+
+      node = parent;
+
+      // 固定定位的那一層通常就是包住遮罩與彈窗的整個 overlay。
+      if (getComputedStyle(node).position === 'fixed') {
+        target = node;
+        break;
+      }
+    }
+
+    return target;
+  }
+
+  function collectLoginDialogs(targets) {
     const dialogs = document.querySelectorAll(
       '[role="dialog"], [aria-modal="true"]'
     );
 
     for (const dialog of dialogs) {
-      if (dialog.hasAttribute('data-threads-overlay')) {
-        continue;
-      }
-
       if (!isLoginDialog(dialog)) {
         continue;
       }
 
-      // 找到 body 的直接子元素（portal root）。
-      let portalRoot = dialog;
+      const target = overlayTargetFor(dialog);
 
-      while (
-        portalRoot.parentElement &&
-        portalRoot.parentElement !== document.body
-      ) {
-        portalRoot = portalRoot.parentElement;
+      if (isSafeToHide(target)) {
+        targets.add(target);
       }
-
-      // 找到 portal root 的子元素中包含此 dialog 的那一層。
-      // 隱藏這一層而非整個 portal root，保留同層其他內容。
-      let wrapper = dialog;
-
-      while (
-        wrapper.parentElement &&
-        wrapper.parentElement !== portalRoot
-      ) {
-        wrapper = wrapper.parentElement;
-      }
-
-      // 若 wrapper 內有媒體播放器，只隱藏 dialog 本身。
-      if (isMediaViewer(wrapper) && wrapper !== dialog) {
-        dialog.setAttribute('data-threads-overlay', '');
-        setImportant(dialog, 'display', 'none');
-      } else {
-        wrapper.setAttribute('data-threads-overlay', '');
-        setImportant(wrapper, 'display', 'none');
-      }
-
-      unlockScroll();
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Sidebar login panel hiding
-  // 右側邊欄的「登入或註冊 Threads」面板不是 dialog，需要獨立偵測。
-  // -----------------------------------------------------------------------
-
-  function hideSidebarLogin() {
+  function collectSidebarPanels(targets) {
     const candidates = document.querySelectorAll(
       'span[dir="auto"], div[dir="auto"], h1, h2, h3, span'
     );
+
+    // 以視窗寬度為基準。原本寫死 500px，在手機（約 390px）永遠不成立，
+    // 會一路往上爬到 portal root 而把含影片的整個容器隱藏。
+    const widthLimit = Math.min(window.innerWidth * 0.9, 500);
 
     for (const el of candidates) {
       const text = String(el.textContent || '').trim();
@@ -386,48 +415,46 @@
         continue;
       }
 
-      // 向上尋找 sticky/fixed 的面板容器，但不超過合理大小。
-      // 面板本身約 300–400px 寬，若容器太大代表已超出面板範圍。
-      let panel = el;
-
-      while (panel.parentElement && panel.parentElement !== document.body) {
-        const w = panel.parentElement.getBoundingClientRect().width;
-        if (w > 500) break;
-        panel = panel.parentElement;
-      }
-
-      if (panel.hasAttribute('data-threads-cta')) {
+      // 彈窗內的登入面板由 collectLoginDialogs 處理。
+      if (el.closest('[role="dialog"], [aria-modal="true"]')) {
         continue;
       }
 
-      panel.setAttribute('data-threads-cta', '');
-      setImportant(panel, 'display', 'none');
+      let panel = el;
+
+      for (let i = 0; i < MAX_CLIMB; i += 1) {
+        const parent = panel.parentElement;
+
+        if (!parent || parent === document.body) {
+          break;
+        }
+
+        if (parent.getBoundingClientRect().width > widthLimit) {
+          break;
+        }
+
+        if (!isSafeToHide(parent)) {
+          break;
+        }
+
+        panel = parent;
+      }
+
+      if (isSafeToHide(panel)) {
+        targets.add(panel);
+      }
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Standalone CTA hiding
-  // -----------------------------------------------------------------------
-
-  function hideStandaloneCTAs() {
+  function collectStandaloneCTAs(targets) {
     const controls = document.querySelectorAll(
       '[role="button"], button, a[href]'
     );
 
     for (const element of controls) {
-      if (
-        element.closest(
-          '[data-threads-overlay], [data-threads-cta]'
-        )
-      ) {
-        continue;
-      }
-
       if (!isButtonLabel(element)) {
         continue;
       }
-
-      let hideTarget = element;
 
       // 播放器內的 CTA 只隱藏按鈕本身。若往上隱藏容器會壓垮播放器的
       // flex 版面，導致影片被擠成一條細線。
@@ -438,93 +465,123 @@
       const insideMediaViewer =
         enclosingDialog && isMediaViewer(enclosingDialog);
 
-      // 往上尋找只包含登入/App CTA 的容器，避免隱藏後留下空白。
-      for (
-        let node = insideMediaViewer ? null : element.parentElement;
-        node && node !== document.body;
-        node = node.parentElement
-      ) {
-        const interactive = Array.from(
-          node.querySelectorAll(
-            '[role="button"], button, a[href]'
-          )
-        );
+      let hideTarget = element;
 
-        if (!interactive.length) {
-          continue;
+      if (!insideMediaViewer) {
+        let node = element;
+
+        // 往上尋找只包含登入/App CTA 的容器，避免隱藏後留下空白。
+        for (let i = 0; i < MAX_CLIMB; i += 1) {
+          const parent = node.parentElement;
+
+          if (!parent || parent === document.body) {
+            break;
+          }
+
+          if (!isSafeToHide(parent)) {
+            break;
+          }
+
+          const interactive = Array.from(
+            parent.querySelectorAll(
+              '[role="button"], button, a[href]'
+            )
+          );
+
+          // 容器中若有非登入 CTA，就不能再往上隱藏。
+          if (
+            !interactive.length ||
+            !interactive.every(isButtonLabel)
+          ) {
+            break;
+          }
+
+          node = parent;
+          hideTarget = parent;
         }
-
-        // 如果容器中包含非登入 CTA，就不能再往上隱藏。
-        if (!interactive.every(isButtonLabel)) {
-          break;
-        }
-
-        hideTarget = node;
       }
 
-      if (!hideTarget.hasAttribute('data-threads-cta')) {
-        hideTarget.setAttribute('data-threads-cta', '');
-        setImportant(hideTarget, 'display', 'none');
+      if (isSafeToHide(hideTarget)) {
+        targets.add(hideTarget);
       }
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Main routine
-  // -----------------------------------------------------------------------
-
-  // -----------------------------------------------------------------------
-  // Overlay 回收
-  // SPA 導航後 Threads 可能在先前被隱藏的容器內放入新內容（如 media
-  // viewer）。若已標記的 overlay 容器不再包含登入 dialog，解除隱藏。
-  // -----------------------------------------------------------------------
-
-  function releaseStaleOverlays() {
-    const marked = document.querySelectorAll(
-      '[data-threads-overlay]'
-    );
-
-    for (const el of marked) {
-      // 容器內出現媒體播放器 → SPA 已切換，優先顯示。
-      if (isMediaViewer(el)) {
-        el.removeAttribute('data-threads-overlay');
-        el.style.removeProperty('display');
+  function collectNav(targets) {
+    for (const nav of document.querySelectorAll('nav')) {
+      // 播放器內的 nav 是它版面的一部分，隱藏會讓影片塌陷。
+      if (nav.closest('[role="dialog"], [aria-modal="true"]')) {
         continue;
       }
 
-      // 被標記的元素本身就是登入 dialog → 維持隱藏。
-      if (isLoginDialog(el)) {
-        continue;
+      if (isSafeToHide(nav)) {
+        targets.add(nav);
       }
-
-      // 容器內仍有未處理的登入 dialog → 繼續隱藏。
-      const hasLogin = Array.from(
-        el.querySelectorAll('[role="dialog"], [aria-modal="true"]')
-      ).some(d => d !== el && isLoginDialog(d));
-
-      if (hasLogin) {
-        continue;
-      }
-
-      // 容器已無登入內容（可能已被 SPA 換成 media viewer），解除隱藏。
-      el.removeAttribute('data-threads-overlay');
-      el.style.removeProperty('display');
     }
+  }
+
+  function collectTargets() {
+    const targets = new Set();
+
+    collectLoginDialogs(targets);
+    collectSidebarPanels(targets);
+    collectStandaloneCTAs(targets);
+    collectNav(targets);
+
+    return targets;
+  }
+
+  // -----------------------------------------------------------------------
+  // 套用：與上一輪比對，還原不再符合條件的元素
+  // -----------------------------------------------------------------------
+
+  const hiddenElements = new Set();
+
+  function hideElement(element) {
+    if (hiddenElements.has(element)) {
+      return;
+    }
+
+    element.setAttribute(HIDDEN_ATTR, '');
+    setImportant(element, 'display', 'none');
+    hiddenElements.add(element);
+  }
+
+  function showElement(element) {
+    element.removeAttribute(HIDDEN_ATTR);
+    element.style.removeProperty('display');
+    hiddenElements.delete(element);
   }
 
   function run() {
     // CSS 可能尚未注入，或被 Threads hydration 移除。
     ensureStyle();
 
-    if (!document.documentElement) {
+    if (!document.documentElement || !document.body) {
       return;
     }
 
-    releaseStaleOverlays();
-    hideOverlay();
-    hideSidebarLogin();
-    hideStandaloneCTAs();
-    unlockScroll();
+    const targets = collectTargets();
+
+    // 還原：已從 DOM 移除，或這一輪不再符合條件的元素。
+    for (const element of Array.from(hiddenElements)) {
+      if (!element.isConnected) {
+        hiddenElements.delete(element);
+        continue;
+      }
+
+      if (!targets.has(element)) {
+        showElement(element);
+      }
+    }
+
+    for (const element of targets) {
+      hideElement(element);
+    }
+
+    if (targets.size) {
+      unlockScroll();
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -586,29 +643,19 @@
   // Lifecycle events
   // -----------------------------------------------------------------------
 
-  window.addEventListener('load', scheduleRun, {
+  window.addEventListener('load', scheduleRun, { passive: true });
+
+  document.addEventListener('DOMContentLoaded', scheduleRun, {
     passive: true,
   });
 
-  document.addEventListener(
-    'DOMContentLoaded',
-    scheduleRun,
-    { passive: true }
-  );
+  window.addEventListener('pageshow', scheduleRun, { passive: true });
 
-  window.addEventListener('pageshow', scheduleRun, {
+  window.addEventListener('focus', scheduleRun, { passive: true });
+
+  document.addEventListener('readystatechange', scheduleRun, {
     passive: true,
   });
-
-  window.addEventListener('focus', scheduleRun, {
-    passive: true,
-  });
-
-  document.addEventListener(
-    'readystatechange',
-    scheduleRun,
-    { passive: true }
-  );
 
   document.addEventListener(
     'visibilitychange',
