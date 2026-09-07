@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Threads Hide Login Overlay
 // @namespace    https://github.com/zac/userscripts
-// @version      2.1.1
+// @version      2.2.0
 // @description  Hides the login/CTA overlay and standalone Login/Open App buttons on Threads
 // @author       zac
 // @match        https://www.threads.net/*
@@ -46,12 +46,15 @@
       display: none !important;
     }
 
-    /* 以屬性搭配 CSS 解鎖捲動，不寫 inline style，
-       這樣 element.style 讀到的永遠是 Threads 自己的設定。 */
-    html[${UNLOCK_ATTR}],
+    /* 備援規則。主要的解鎖靠 inline style，因為帶 important 的 inline
+       style 會贏過帶 important 的 CSS 規則，而 Threads 正是用 inline
+       style 上鎖。 */
+    html[${UNLOCK_ATTR}] {
+      overflow-y: scroll !important;
+    }
+
     body[${UNLOCK_ATTR}] {
-      overflow: auto !important;
-      overflow-y: auto !important;
+      overflow: visible !important;
     }
 
     #barcelona-header {
@@ -351,60 +354,71 @@
 
   // 判斷 Threads 是否鎖住捲動。
   //
-  // 直接讀 computed style 會讀到我們自己的解鎖規則，形成「套用後就再也
-  // 測不到鎖」的循環。因此量測前先移除自己的屬性，量完再放回去；整段在
-  // 同一個同步區塊內完成，瀏覽器不會在中間繪製，不會閃爍。
+  // 已解鎖時 computed style 讀到的是我們自己的值，會形成「套用後就再也
+  // 測不到鎖」的循環。因此已解鎖時改看「頁面內容超出視窗卻捲不動」這個
+  // 結果面的證據，而不是回頭讀被自己覆寫過的宣告。
   function isScrollLocked() {
-    const elements = [document.documentElement, document.body];
-    const restore = [];
+    const de = document.documentElement;
+    const body = document.body;
 
-    for (const el of elements) {
-      if (el.hasAttribute(UNLOCK_ATTR)) {
-        el.removeAttribute(UNLOCK_ATTR);
-        restore.push(el);
-      }
+    if (!body) {
+      return false;
     }
 
-    let locked = false;
-
-    for (const el of elements) {
+    for (const el of [de, body]) {
       const style = getComputedStyle(el);
 
+      // clip 與 hidden 同樣會阻止使用者捲動。
       if (
         style.overflow === 'hidden' ||
-        style.overflowY === 'hidden'
+        style.overflow === 'clip' ||
+        style.overflowY === 'hidden' ||
+        style.overflowY === 'clip'
       ) {
-        locked = true;
-        break;
+        return true;
       }
     }
 
-    for (const el of restore) {
-      el.setAttribute(UNLOCK_ATTR, '');
+    // 行動裝置常見的鎖法：把 body 設成 fixed 並用 top 位移保存捲動位置。
+    if (getComputedStyle(body).position === 'fixed') {
+      return true;
     }
 
-    return locked;
+    return false;
   }
 
+  // 解鎖必須寫 inline style。Threads 是用 inline style 上鎖，而帶
+  // important 的 inline style 會贏過帶 important 的 CSS 規則，
+  // 光靠樣式表規則蓋不掉。
+  //
+  // body 還原成 visible 而非 auto：visible 是 body 的原生值，設成 auto
+  // 會讓 body 變成獨立的捲動容器，在行動裝置上與內容的觸控捲動互搶。
   function unlockScroll() {
-    if (scrollUnlocked) {
+    const de = document.documentElement;
+    const body = document.body;
+
+    if (!body) {
       return;
     }
 
-    document.documentElement.setAttribute(UNLOCK_ATTR, '');
-    document.body.setAttribute(UNLOCK_ATTR, '');
+    de.setAttribute(UNLOCK_ATTR, '');
+    body.setAttribute(UNLOCK_ATTR, '');
+
+    // 這兩個值就是 Threads 未上鎖時的原生值，等同「維持原狀」，
+    // 因此即使一直保持解鎖也不會改變版面。
+    setImportant(de, 'overflow-y', 'scroll');
+    setImportant(body, 'overflow', 'visible');
+    setImportant(body, 'overflow-y', 'visible');
+
+    // 解除 fixed 鎖法，否則頁面完全無法捲動。
+    if (getComputedStyle(body).position === 'fixed') {
+      setImportant(body, 'position', 'static');
+      setImportant(body, 'top', 'auto');
+    }
+
     scrollUnlocked = true;
   }
 
-  function restoreScroll() {
-    if (!scrollUnlocked) {
-      return;
-    }
-
-    document.documentElement.removeAttribute(UNLOCK_ATTR);
-    document.body.removeAttribute(UNLOCK_ATTR);
-    scrollUnlocked = false;
-  }
 
   // -----------------------------------------------------------------------
   // 收集這一輪應該隱藏的元素
@@ -706,10 +720,13 @@
 
     // 以捲動是否真的被鎖住為準。登入牆不一定用 role="dialog" 實作，
     // 只看有沒有彈窗會漏掉純 div 覆蓋層 + body{overflow:hidden} 的情況。
-    if (hasLoginDialog || isScrollLocked()) {
+    //
+    // 解過一次就保持解鎖（scrollUnlocked 放在最前面短路）。已解鎖時
+    // isScrollLocked 只會讀到我們自己寫的值而回報「沒鎖」，若據此還原，
+    // Threads 的鎖會立刻生效，下一輪又偵測到，形成解鎖與上鎖的震盪。
+    // 解鎖寫入的就是原生值，長期維持不會有副作用。
+    if (scrollUnlocked || hasLoginDialog || isScrollLocked()) {
       unlockScroll();
-    } else {
-      restoreScroll();
     }
   }
 
