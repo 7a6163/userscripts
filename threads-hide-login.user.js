@@ -70,22 +70,21 @@
 
   function ensureStyle() {
     if (document.getElementById(STYLE_ID)) {
-      return true;
+      return;
     }
 
     const parent = document.head || document.documentElement;
 
     // iOS Userscripts App 在 document-start 時可能兩者都還不存在。
+    // 稍後 observer 或 poll 會再次觸發，屆時補上。
     if (!parent) {
-      return false;
+      return;
     }
 
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = STYLE_TEXT;
     parent.appendChild(style);
-
-    return true;
   }
 
   // -----------------------------------------------------------------------
@@ -161,7 +160,6 @@
     '打开 threads',
     '登录',
     '注册',
-    '使用 app',
     '使用应用',
     '改用用户名登录',
     '改用用户名登录。',
@@ -359,9 +357,10 @@
 
   // 判斷 Threads 是否鎖住捲動。
   //
-  // 已解鎖時 computed style 讀到的是我們自己的值，會形成「套用後就再也
-  // 測不到鎖」的循環。因此已解鎖時改看「頁面內容超出視窗卻捲不動」這個
-  // 結果面的證據，而不是回頭讀被自己覆寫過的宣告。
+  // 直接讀 computed style，因此只在尚未解鎖時才可信：一旦解鎖，讀到的
+  // 就是我們自己寫進去的值，必然回報「沒鎖」。避免據此還原而與 Threads
+  // 的鎖形成震盪，是呼叫端的責任 —— run() 用 scrollUnlocked 短路，解過
+  // 一次之後就不再參考這個結果。
   function isScrollLocked() {
     const de = document.documentElement;
     const body = document.body;
@@ -424,13 +423,15 @@
     scrollUnlocked = true;
   }
 
-
   // -----------------------------------------------------------------------
   // 收集這一輪應該隱藏的元素
   // -----------------------------------------------------------------------
 
-  // 往上尋找容器的最大層數。Threads 版面很深，無上限往上爬會直接
-  // 爬到 portal root，把整頁（含影片）一起隱藏。
+  // collectSidebarPanels 往上尋找面板容器時的層數上限。側欄面板本身很淺，
+  // 設上限是為了在寬度量不到（例如祖先已被隱藏而回報 0）時不至於一路往上爬。
+  //
+  // overlayTargetFor 不受此限制：它刻意一路爬到 portal root，因為登入牆的
+  // 遮罩與攔截層就在那一層。
   const MAX_CLIMB = 6;
 
   // 從登入 dialog 一路往上找到 body 的直接子元素（React portal root）。
